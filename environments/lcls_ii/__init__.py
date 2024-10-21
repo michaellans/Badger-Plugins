@@ -20,7 +20,7 @@ class Environment(environment.Environment):
         'QUAD:COL0:320:BCTRL': [],
         'QUAD:COL1:120:BCTRL': [],
         'QUAD:COL1:260:BCTRL': [],
-        'QUAD:COL1:280:BCTRL': [],
+        'QUAD:COL1:280:BCTRL': [],  # this one is often offline
         'QUAD:COL1:320:BCTRL': [],
         'QUAD:EMIT2:150:BCTRL': [],
         'QUAD:EMIT2:300:BCTRL': [],
@@ -36,6 +36,10 @@ class Environment(environment.Environment):
         'QUAD:LTUS:660:BCTRL': [],
         'QUAD:LTUS:680:BCTRL': [],
         'QUAD:HTR:120:BCTRL': [],
+        'QUAD:BC1B:250:BCTRL': [],
+        'QUAD:BC1B:750:BCTRL': [],
+        'QUAD:BC2B:250:BCTRL': [],
+        'QUAD:BC2B:850:BCTRL': [],
     }
     observables = [
         'sxr_pulse_intensity_p80',
@@ -61,11 +65,13 @@ class Environment(environment.Environment):
     points: int = 100
     stats: str = 'percent_80'
     # Var setters
-    use_check_var: bool = False  # if check var reaches the target value
+    use_check_var: bool = True  # if check var reaches the target value
     check_var_timeout: float = 3.0  # tumeout for the var check
     trim_delay: float = 7.0  # in second
     # MPS fault check
+    use_check_fault: bool = True  # if check fault status
     check_fault_timeout: float = 5.0  # in second
+    # Other
     lasering: bool = True  # if it's lasering
 
     def get_bounds(self, variable_names):
@@ -79,6 +85,10 @@ class Environment(environment.Environment):
 
         bound_outputs = {}
         for i, v in enumerate(variable_names):
+            if bounds_low[pvs_low[i]] is None or bounds_high[pvs_high[i]] is None:
+                bounds_low[pvs_low[i]] = -1000
+                bounds_high[pvs_high[i]] = 1000
+
             bound_outputs[v] = [
                 bounds_low[pvs_low[i]],
                 bounds_high[pvs_high[i]]]
@@ -107,8 +117,11 @@ class Environment(environment.Environment):
             if time_elapsed > self.check_var_timeout:
                 raise BadgerInterfaceChannelError
 
-        variable_outputs = {v: channel_outputs[channel_names[i]]
-                            for i, v in enumerate(variable_names)}
+            channel_outputs = self.interface.get_values(channel_names)
+
+        variable_outputs = {
+            v: channel_outputs[channel_names[i]] for i, v in enumerate(variable_names)
+        }
 
         return variable_outputs
 
@@ -117,6 +130,12 @@ class Environment(environment.Environment):
             raise BadgerNoInterfaceError
 
         self.interface.set_values(variable_inputs)
+        self.check_variables(variable_inputs)
+
+    def check_variables(self, variable_inputs):
+        # If use_check_var is False, we simply sleep for trim_delay seconds
+        # else, we check if the variables have reached the target values, then
+        # sleep for trim_delay seconds
 
         if not self.use_check_var:
             if self.trim_delay:
@@ -124,20 +143,45 @@ class Environment(environment.Environment):
 
             return
 
-        variable_ready_flags = [v[:v.rfind(':')] + ':STATCTRLSUB.T'
-                                for v in variable_inputs
-                                if v.endswith(':BCTRL')]
-        variable_status = self.interface.get_values(variable_ready_flags)
+        # For those STATCTRLSUB.T flag, 0 means settled, 1 means changing
+        variable_ready_flags = [
+            v[: v.rfind(":")] + ":STATCTRLSUB.T"
+            for v in variable_inputs
+            if v.endswith(":BCTRL")
+        ]
 
         time_start = time.time()
-        while np.any(np.array(variable_status.values())):
+
+        # Wait for magnets to start changing
+        # Since there is a delay in the flag PV response,
+        # we wait for max 3 seconds
+        variable_status = self.interface.get_values(variable_ready_flags)
+
+        while not np.any(np.array(list(variable_status.values()))):
+            time.sleep(0.1 * np.random.rand())
+
+            variable_status = self.interface.get_values(variable_ready_flags)
+
+            time_elapsed = time.time() - time_start
+            if time_elapsed > self.check_var_timeout:  # or 3s?
+                break
+        # Here is a lite and rough version of the above code
+        # time.sleep(3.0)
+        # TODO: add debug message to show how long it takes to start changing
+
+        # Wait for magnets to settle
+        variable_status = self.interface.get_values(variable_ready_flags)
+
+        while np.any(np.array(list(variable_status.values()))):
             time.sleep(0.1 * np.random.rand())
 
             variable_status = self.interface.get_values(variable_ready_flags)
 
             time_elapsed = time.time() - time_start
             if time_elapsed > self.check_var_timeout:
+                # raise RuntimeWarning("check var timeout exceeded")
                 break
+        # TODO: add debug message to show how long it takes to settle
 
         if self.trim_delay:
             time.sleep(self.trim_delay)  # extra time for stablizing orbits
@@ -148,13 +192,24 @@ class Environment(environment.Environment):
         # 1: BSA buffer
         # 2: manually data collection
         if self.method == 0:
+            req_rate = self.interface.get_value('TPG:SYS0:1:DST04:REQRATE')
+
+            if not req_rate:
+                raise BadgerEnvObsError
+
+            req_rate = float(req_rate)
+            if req_rate < 100:
+                rate_suffix = 'TH'  # 10 Hz
+            else:
+                rate_suffix = 'HH'  # 100 Hz
+
             if self.xgmd:
                 if self.avg:
                     intensity = self.interface.get_value(
                         'EM2K0:XGMD:HPS:AvgPulseIntensity')
                 else:
                     intensity = self.interface.get_value(
-                        'EM2K0:XGMD:HPS:milliJoulesPerPulse')
+                        f'EM2K0:XGMD:HPS:milliJoulesPerPulseSCS{rate_suffix}')
             else:
                 if self.avg:
                     intensity = self.interface.get_value(
@@ -165,7 +220,7 @@ class Environment(environment.Environment):
 
             loss = self.interface.get_value(self.loss_pv)
 
-            return intensity, intensity, intensity, 0, loss
+            return intensity, intensity, intensity, 0.0, loss
         elif self.method == 1:
             points = self.points
             logging.info(f'Get value of {points} points')
@@ -201,7 +256,7 @@ class Environment(environment.Environment):
             loss_raw = results_dict[PV_loss][-points:]
             ind_valid = ~np.logical_or(np.isnan(intensity_raw), np.isnan(loss_raw))
             intensity_valid = intensity_raw[ind_valid]
-            loss_valid = intensity_raw[ind_valid]
+            loss_valid = loss_raw[ind_valid]
 
             n_valid = len(intensity_valid)
             if not n_valid:
@@ -228,17 +283,23 @@ class Environment(environment.Environment):
         else:
             MPS_PV = 'SIOC:SYS0:MP00:SC_BSYD_BC'
 
+        NC_lion_PV = 'LION:LTU0:716:VACT'
+        NC_lion_threshold = 0.5
+
         ts_start = time.time()
         while True:
             # req_rate = self.interface.get_value('TPG:SYS0:1:DST04:REQRATE')
             # act_rate = self.interface.get_value('TPG:SYS0:1:DST04:RATE')
             # is_rate_matched = (req_rate == act_rate)
 
+            is_NC_OK = self.interface.get_value(NC_lion_PV) < NC_lion_threshold
+
             permit_MPS = self.interface.get_value(
                 MPS_PV, as_string=True)
             is_beam_on = (permit_MPS != 'Beam Off')
 
             # if is_rate_matched and is_beam_on:
+            # if is_NC_OK and is_beam_on:
             if is_beam_on:
                 break
             else:
@@ -261,7 +322,8 @@ class Environment(environment.Environment):
             raise BadgerNoInterfaceError
 
         # Make sure machine is not in a fault state
-        self.check_fault_status()
+        if self.use_check_fault:
+            self.check_fault_status()
 
         if self.is_sxr_pulse_intensity_observed(observable_names) or \
            self.is_beam_loss_observed(observable_names):

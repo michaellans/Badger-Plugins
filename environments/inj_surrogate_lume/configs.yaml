@@ -1,0 +1,9 @@
+---
+name: inj_surrogate_lume
+version: "0.1"
+dependencies:
+  - lume-model
+  - badger-opt
+interface:
+  - lume
+

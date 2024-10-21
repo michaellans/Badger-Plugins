@@ -1,4 +1,4 @@
-# LCLS Environment for Badger
+# LCLS Environment w/ counter hysteresis feature
 
 This is the LCLS environment for Badger, usually you should only use it in the LCLS ACR, and be very careful since it would change the machine parameters once you run the routine containing this env!
 
@@ -26,6 +26,9 @@ For most cases the default env parameters should work but sometimes you might wa
     - If set to `False`, Badger will not check if the variables reach the desired values, instead it would wait for `trim_delay` seconds then directly measure the observables defined in the routine
 - `trim_delay`: The waiting time between setting variables and getting observables
     - If `use_check_var` is set to `True`, `trim_delay` would have no effects. This behavior would be changed in the future since sometimes we need extra settle down time even after all variables have reached their desired values
+- `overshoot_fraction`: The amount Badger would overshoot if a PV w/ hysteresis is tuned down -- Badger would overshoot the target value by `overshoot_fraction` * variable full range, then recover it back to the desired values. This way we guarantee that for quads we always tune them up to the destinations, thus counter the hysteresis effect
+    - Default value is `0.1`, usually it's a bit too big if we are tuning all quads within a small range, you should experiment w/ it but it's usually safe to go value around `0.02`
+    - Set it to `0.0` to turn off the counter-hysteresis feature
 
 ## Notes
 
@@ -33,10 +36,12 @@ In most cases, when you compose a routine w/ the LCLS env, you'll only need to t
 
 - `fel_channel`
 - `loss_pv`
+- `overshoot_fraction`
 
-according to your needs. The most commonly used values for the two params above are:
+according to your needs. The most commonly used values for the params above are:
 
 - `fel_channel`: `241`
 - `loss_pv`: `CBLM:UNDH:1375:I1_LOSSHSTBR`
+- `overshoot_fraction`: 0.0
 
 If you encounter any issues in a run that uses the LCLS env, please reach out to the env author. The contact info is listed in the author section.

@@ -56,6 +56,10 @@ class Environment(environment.Environment):
 
         bound_outputs = {}
         for i, v in enumerate(variable_names):
+            if bounds_low[pvs_low[i]] is None or bounds_high[pvs_high[i]] is None:
+                bounds_low[pvs_low[i]] = -1000
+                bounds_high[pvs_high[i]] = 1000
+
             bound_outputs[v] = [bounds_low[pvs_low[i]], bounds_high[pvs_high[i]]]
 
         return bound_outputs
