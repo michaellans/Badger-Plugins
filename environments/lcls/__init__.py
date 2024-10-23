@@ -6,6 +6,7 @@ from badger.stats import percent_80
 from badger.errors import BadgerEnvObsError, BadgerInterfaceChannelError
 import logging
 
+from .fel import lcls_observables
 
 class Environment(environment.Environment):
 
@@ -256,14 +257,35 @@ class Environment(environment.Environment):
         # Make sure machine is not in a fault state
         self.check_fault_status()
 
-        observe_gas = self.is_pulse_intensity_observed(observable_names)
-        observe_loss = self.is_beam_loss_observed(observable_names)
+        fel_observable_pvs = {}
 
-        if observe_gas:
-            intensity_p80, intensity_mean, intensity_median, intensity_std, \
-                loss_p80 = self.get_intensity_n_loss()
-        elif observe_loss:
-            loss_p80 = self.get_loss()
+        # check for pulse intensity and set PV_gas
+        if self.is_pulse_intensity_observed(observable_names):
+            if self.hxr:
+                PV_gas = f'GDET:FEE1:{self.fel_channel}:ENRCHSTCUHBR'
+            else:  # SXR
+                PV_gas = 'EM1K0:GMD:HPS:milliJoulesPerPulseHSTCUSBR'
+            fel_observable_pvs['PV_gas'] = PV_gas
+
+        # check for loss and set PV_loss
+        if self.is_beam_loss_observed(observable_names):
+            PV_loss = self.loss_pv
+            fel_observable_pvs['PV_loss'] = PV_loss
+
+        fel_observables = lcls_observables.get_fel_observables(
+                                interface = self.interface,
+                                points = self.points,
+                                observable_names = observable_names,
+                                observable_pvs = fel_observable_pvs,
+                                )
+        
+        # I think I can just do:
+        # for key in fel_observables:
+        #    observable_outputs[key] = fel_observables[value]
+        # to add the key:value pairs to the output dictionary from lcls/__init__.py get_observables() ???
+        # If these always need values it could check in get_fel_observables and set them to a default if they're not requested
+        for key in fel_observables:
+            observable_outputs[key] = fel_observables[value]
 
         observable_outputs = {}
         mid = self.beamsize_monitor
@@ -288,6 +310,11 @@ class Environment(environment.Environment):
                 bs_x = self.interface.get_value(f'OTRS:IN20:{mid}:XRMS')
                 bs_y = self.interface.get_value(f'OTRS:IN20:{mid}:YRMS')
                 value = np.sqrt(bs_x * bs_y)
+            elif obs == 'pulse_id':
+                value = self.interface.get_value('PATT:SYS0:1:PULSEID')
+            else:  # won't happen actually
+                value = None
+            """
             elif obs == 'beam_loss':
                 value = loss_p80
             elif obs == 'pulse_intensity_p80':
@@ -300,10 +327,8 @@ class Environment(environment.Environment):
                 value = intensity_std
             elif obs == 'pulse_intensity_std_relative':
                 value = intensity_std / (intensity_mean + self.epsilon)
-            elif obs == 'pulse_id':
-                value = self.interface.get_value('PATT:SYS0:1:PULSEID')
-            else:  # won't happen actually
-                value = None
+            """
+            
 
             observable_outputs[obs] = value
 
